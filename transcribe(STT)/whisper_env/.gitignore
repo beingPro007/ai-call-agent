@@ -1,0 +1,9 @@
+whisper_env/
+temp_files/
+share/
+__pycache__/
+.env
+*.pyc
+/Lib
+Scripts
+pyvenv.cfg
