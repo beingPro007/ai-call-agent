@@ -22,6 +22,7 @@ jobs:
       - name: Install Render CLI
         run: |
           curl -fsSL https://cdn.rendertool.com/install.sh | bash
+          echo "::add-path::${HOME}/.render/bin"
 
       - name: Authenticate with Render
         env:
@@ -31,11 +32,11 @@ jobs:
 
       - name: Deploy service
         env:
-          API_URL:          ${{ secrets.API_URL }}
-          GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}
-          ELEVENLABS_KEY:   ${{ secrets.ELEVENLABS_KEY }}
-          LIVEKIT_URL:      ${{ secrets.LIVEKIT_URL }}
-          LIVEKIT_API_KEY:  ${{ secrets.LIVEKIT_API_KEY }}
+          API_URL:            ${{ secrets.API_URL }}
+          GEMINI_API_KEY:     ${{ secrets.GEMINI_API_KEY }}
+          ELEVENLABS_KEY:     ${{ secrets.ELEVENLABS_KEY }}
+          LIVEKIT_URL:        ${{ secrets.LIVEKIT_URL }}
+          LIVEKIT_API_KEY:    ${{ secrets.LIVEKIT_API_KEY }}
           LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
         run: |
           render services deploy \
