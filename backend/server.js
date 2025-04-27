@@ -2,8 +2,6 @@ import fastify from 'fastify';
 import cors from '@fastify/cors';
 import staticPlugin from '@fastify/static';
 import multipart from '@fastify/multipart';
-import path from 'path';
-import fs from 'fs';
 import dotenv from 'dotenv';
 import axios from 'axios';
 import FormData from 'form-data';
@@ -89,7 +87,7 @@ app.get('/tts', async (req, reply) => {
 });
 
 // Start server
-const PORT = parseInt(process.env.PORT) || 3000;
+const PORT = process.env.PORT || 8000;
 app.listen({ port: PORT }, (err, address) => {
     if (err) {
         app.log.error(err);
