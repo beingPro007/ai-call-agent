@@ -15,7 +15,7 @@ const MicVAD = dynamic(
   () => import("@ricky0123/vad-web").then((mod) => mod.MicVAD),
   { ssr: false }
 );
-
+fz
 /**
  * useConversationLiveKit hook
  * Manages:
@@ -130,22 +130,6 @@ export function useConversationLiveKit(roomName, backendUrl, liveKitUrl) {
 
     let active = true;
     (async () => {
-      const NUM_THREADS = navigator.hardwareConcurrency || 1;
-      const modelOptions = {
-        model_size_or_path: "tiny.en",
-        device: "cpu",
-        compute_type: "int8_float16",
-        cpu_threads: NUM_THREADS,
-      };
-      // Lazy‐load WhisperModel so it's not in server bundle
-      const { WhisperModel } = await import("faster-whisper");
-      let model;
-      try {
-        model = new WhisperModel(modelOptions);
-      } catch {
-        modelOptions.compute_type = "int8";
-        model = new WhisperModel(modelOptions);
-      }
 
       // Start VAD
       const vadInstance = await MicVAD.new({
