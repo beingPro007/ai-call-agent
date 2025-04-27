@@ -87,7 +87,7 @@ app.get('/tts', async (req, reply) => {
 });
 
 // Start server
-const PORT = process.env.PORT || 8000;
+const PORT = process.env.PORT || 10000;
 app.listen({ port: PORT }, (err, address) => {
     if (err) {
         app.log.error(err);
