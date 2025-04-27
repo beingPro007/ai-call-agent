@@ -1,0 +1,33 @@
+# Use official Node.js Alpine image
+FROM node:18-alpine
+
+# Declare build-time args for secrets/config
+ARG API_URL
+ARG GEMINI_API_KEY
+ARG ELEVENLABS_KEY
+ARG LIVEKIT_URL
+ARG LIVEKIT_API_KEY
+ARG LIVEKIT_API_SECRET
+
+# Export as environment variables
+ENV API_URL=$API_URL \
+    GEMINI_API_KEY=$GEMINI_API_KEY \
+    ELEVENLABS_KEY=$ELEVENLABS_KEY \
+    LIVEKIT_URL=$LIVEKIT_URL \
+    LIVEKIT_API_KEY=$LIVEKIT_API_KEY \
+    LIVEKIT_API_SECRET=$LIVEKIT_API_SECRET
+
+WORKDIR /app
+
+# Copy package files and install dependencies
+COPY package*.json ./
+RUN npm install
+
+# Copy entire source
+COPY . ./
+
+# Expose the port your API listens on
+EXPOSE 3000
+
+# Start the backend
+CMD ["npm", "run", "server"]
