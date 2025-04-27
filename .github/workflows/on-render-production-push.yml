@@ -15,7 +15,13 @@ jobs:
 
       - name: Install Render CLI
         run: |
-          curl -fsSL https://cdn.rendertool.com/install.sh | bash
+          for i in {1..5}; do
+            curl -fsSL https://cdn.rendertool.com/install.sh | bash && break || sleep 15
+          done
+
+      - name: Verify Render CLI Installation
+        run: |
+          render --version
 
       - name: Deploy service
         env:
