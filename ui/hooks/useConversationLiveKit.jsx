@@ -1,6 +1,8 @@
+"use client";
+
 import { useState, useRef, useEffect, useCallback } from "react";
+import dynamic from "next/dynamic";
 import axios from "axios";
-import * as vad from "@ricky0123/vad-web";
 import {
   connect,
   createLocalAudioTrack,
@@ -8,26 +10,26 @@ import {
   Room,
 } from "livekit-client";
 
+// Dynamically load the VAD library only on the client
+const MicVAD = dynamic(
+  () => import("@ricky0123/vad-web").then((mod) => mod.MicVAD),
+  { ssr: false }
+);
+
 /**
  * useConversationLiveKit hook
- * ---------------------------
  * Manages:
- * 1. LiveKit connection and publishing local mic track.
- * 2. VAD-driven STT → AI → chunked TTS pipeline with optional LiveKit streaming of AI TTS.
- *
- * @param {string} roomName   - LiveKit room to join
- * @param {string} backendUrl - Base URL of your backend API
- * @param {string} liveKitUrl - WebSocket URL of LiveKit server
+ *  1. LiveKit connection + mic publishing
+ *  2. VAD → STT → AI → chunked TTS → optional LiveKit TTS
  */
 export function useConversationLiveKit(roomName, backendUrl, liveKitUrl) {
   const [isRecording, setIsRecording] = useState(false);
   const [responseText, setResponseText] = useState("");
-  const [loading, setLoading] = useState(false);  
+  const [loading, setLoading] = useState(false);
 
-  const roomRef = useRef(null);
+  const roomRef = useRef(/**<Room|null>*/ null);
   const vadRef = useRef(null);
   const micTrackRef = useRef(null);
-  const ttsTrackRef = useRef(null);
 
   // Convert Float32 frames → WAV Blob
   const float32ToWav = (samples, sr) => {
@@ -57,7 +59,7 @@ export function useConversationLiveKit(roomName, backendUrl, liveKitUrl) {
     return new Blob([dv], { type: "audio/wav" });
   };
 
-  // Split text into sentence-based chunks (~120 chars)
+  // Split AI text into ~120-char sentence chunks
   const chunkText = (text, maxLen = 120) => {
     const regex = /([^.!?]+[.!?]+)\s*/g;
     const parts = text.match(regex) || [];
@@ -75,29 +77,28 @@ export function useConversationLiveKit(roomName, backendUrl, liveKitUrl) {
     return chunks;
   };
 
-  // Connect to LiveKit and publish mic
+  // Connect & publish mic to LiveKit
   const connectLiveKit = useCallback(async () => {
     try {
-      console.log("Backendurl", backendUrl)
+      setLoading(true);
       const { data } = await axios.get(`${backendUrl}/token?room=${roomName}`);
       const room = new Room();
-
-      const createdRoom = await room.connect(liveKitUrl, data.token, {
+      const connected = await room.connect(liveKitUrl, data.token, {
         autoSubscribe: true,
       });
-      roomRef.current = createdRoom;
-      console.log("🎧 Connected to LiveKit", room);
+      roomRef.current = connected;
 
       const micTrack = await createLocalAudioTrack();
       micTrackRef.current = micTrack;
-      await room.localParticipant.publishTrack(micTrack);
-      console.log("🔊 Mic track published");
+      await connected.localParticipant.publishTrack(micTrack);
+      setLoading(false);
     } catch (err) {
       console.error("LiveKit connect error", err);
+      setLoading(false);
     }
   }, [roomName, backendUrl, liveKitUrl]);
 
-  // Disconnect LiveKit and cleanup
+  // Disconnect & cleanup LiveKit
   const disconnectLiveKit = useCallback(() => {
     const room = roomRef.current;
     if (room) {
@@ -107,11 +108,10 @@ export function useConversationLiveKit(roomName, backendUrl, liveKitUrl) {
       }
       room.disconnect();
       roomRef.current = null;
-      console.log("🛑 Disconnected from LiveKit");
     }
   }, []);
 
-  // Effect: manage LiveKit on recording toggle
+  // Handle recording toggle
   useEffect(() => {
     if (isRecording) {
       connectLiveKit();
@@ -121,100 +121,109 @@ export function useConversationLiveKit(roomName, backendUrl, liveKitUrl) {
     return () => disconnectLiveKit();
   }, [isRecording, connectLiveKit, disconnectLiveKit]);
 
-  // Main pipeline: VAD → STT → AI → chunked TTS
+  // Main pipeline: VAD → STT → AI → chunked TTS (all in client useEffect)
   useEffect(() => {
-    if (!isRecording) {
+    if (!isRecording || !MicVAD) {
       vadRef.current?.stop();
       return;
     }
 
     let active = true;
     (async () => {
+      const NUM_THREADS = navigator.hardwareConcurrency || 1;
+      const modelOptions = {
+        model_size_or_path: "tiny.en",
+        device: "cpu",
+        compute_type: "int8_float16",
+        cpu_threads: NUM_THREADS,
+      };
+      // Lazy‐load WhisperModel so it's not in server bundle
+      const { WhisperModel } = await import("faster-whisper");
+      let model;
       try {
-        const vadInstance = await vad.MicVAD.new({
-          positiveSpeechThreshold: 0.85,
-          negativeSpeechThreshold: 0.7,
-          redemptionFrames: 12,
-          onSpeechStart: () => console.log("🎙️ Speech start"),
-          onSpeechEnd: async (floatAudio) => {
-            console.log("🗣️ Speech end, sending to STT");
-            const wavBlob = float32ToWav(floatAudio, 16000);
-            const file = new File([wavBlob], "audio.wav");
-            const form = new FormData();
-            form.append("file", file);
-            console.log(process.env.NEXT_PUBLIC_WHISPER_SERVER_URI);
-            const url =
-              process.env.NODE_ENV !== "production"
-                ? "http://localhost:8000"
-                : process.env.NEXT_PUBLIC_WHISPER_SERVER_URI;
+        model = new WhisperModel(modelOptions);
+      } catch {
+        modelOptions.compute_type = "int8";
+        model = new WhisperModel(modelOptions);
+      }
 
-            // STT
-            const sttRes = await axios.post(
-              `${url}/transcribe`,
-              form,
-              { headers: form.getHeaders ? form.getHeaders() : {} }
-            );
+      // Start VAD
+      const vadInstance = await MicVAD.new({
+        positiveSpeechThreshold: 0.85,
+        negativeSpeechThreshold: 0.7,
+        redemptionFrames: 12,
+        onSpeechStart: () => console.log("🎙️ Speech start"),
+        onSpeechEnd: async (floatAudio) => {
+          console.log("🗣️ Speech end, sending for STT");
+          const wavBlob = float32ToWav(floatAudio, 16000);
+          const file = new File([wavBlob], "audio.wav");
+          const form = new FormData();
+          form.append("file", file);
 
-            const text = sttRes.data.text;
-            console.log("📝 Transcript:", text);
-            if (active) setResponseText(text);
+          // Determine server URL
+          const base =
+            process.env.NODE_ENV !== "production"
+              ? "http://localhost:8001"
+              : process.env.NEXT_PUBLIC_WHISPER_SERVER_URI;
 
-            if (!text) return;
+          // STT request
+          const sttRes = await axios.post(`${base}/transcribe`, form, {
+            headers: form.getHeaders?.(),
+          });
+          const userText = sttRes.data.text;
+          if (!active) return;
+          setResponseText(userText);
 
-            // AI
-            const aiRes = await axios.post(`${backendUrl}/ask-gemini`, {
-              prompt: text,
+          // AI request
+          const aiRes = await axios.post(`${backendUrl}/ask-gemini`, {
+            prompt: userText,
+          });
+          const aiText = aiRes.data.text;
+          if (!active) return;
+          setResponseText(aiText);
+
+          // Chunked TTS playback & optional LiveKit
+          const chunks = chunkText(aiText);
+          for (const chunk of chunks) {
+            // Fetch TTS audio
+            const ttsRes = await axios.get(`${backendUrl}/tts`, {
+              params: { text: chunk },
+              responseType: "arraybuffer",
             });
-            const aiText = aiRes.data.text;
-            console.log("💬 AI:", aiText);
-            if (active) setResponseText(aiText);
-
-            // TTS chunked playback
-            const chunks = chunkText(aiText);
-            for (const chunk of chunks) {
-              const ttsRes = await axios.get(`${backendUrl}/tts`, {
-                params: { text: chunk },
-                responseType: "arraybuffer",
-              });
-              const blob = new Blob([ttsRes.data], { type: "audio/mpeg" });
-              const url = URL.createObjectURL(blob);
-              const audioEl = new Audio(url);
-
-              // Optionally publish AI TTS to LiveKit
+            const blob = new Blob([ttsRes.data], { type: "audio/mpeg" });
+            // All Audio logic in client‐only code
+            if (typeof window !== "undefined") {
+              const audioEl = new Audio(URL.createObjectURL(blob));
+              // Publish to LiveKit if connected
               if (roomRef.current) {
-                const mediaStream = audioEl.captureStream();
-                const mediaTrack = mediaStream.getAudioTracks()[0];
-                const aiTrack = new LocalAudioTrack(mediaTrack);
-                await roomRef.current.localParticipant.publishTrack(aiTrack);
-                console.log("🔊 Published AI TTS track");
+                const stream = audioEl.captureStream();
+                const track = new LocalAudioTrack(stream.getAudioTracks()[0]);
+                await roomRef.current.localParticipant.publishTrack(track);
                 audioEl.onended = async () => {
-                  await roomRef.current.localParticipant.unpublishTrack(
-                    aiTrack
-                  );
+                  await roomRef.current.localParticipant.unpublishTrack(track);
                 };
               }
-
-              // Play and wait for end
               await new Promise((res) => {
                 audioEl.onended = res;
                 audioEl.play().catch(console.error);
               });
             }
-          },
-        });
-        vadRef.current = vadInstance;
-        vadInstance.start();
-        console.log("✅ VAD started");
-      } catch (err) {
-        console.error("Pipeline setup error", err);
-      }
+          }
+        },
+      });
+      vadRef.current = vadInstance;
+      vadInstance.start();
     })();
 
     return () => {
-      active = false;
       vadRef.current?.stop();
     };
   }, [isRecording, backendUrl]);
 
-  return { isRecording, setIsRecording, responseText, loading };
-} 
+  return {
+    isRecording,
+    setIsRecording,
+    responseText,
+    loading,
+  };
+}
