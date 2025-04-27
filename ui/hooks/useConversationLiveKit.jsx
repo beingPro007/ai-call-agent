@@ -15,7 +15,7 @@ const MicVAD = dynamic(
   () => import("@ricky0123/vad-web").then((mod) => mod.MicVAD),
   { ssr: false }
 );
-fz
+
 /**
  * useConversationLiveKit hook
  * Manages:
