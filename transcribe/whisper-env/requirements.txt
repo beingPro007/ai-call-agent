@@ -2,3 +2,4 @@ fastapi
 uvicorn[standard]
 faster-whisper
 ffmpeg-python
+python-multipart
