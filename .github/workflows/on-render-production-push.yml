@@ -1,0 +1,49 @@
+name: Deploy Node.js Backend to Render
+
+on:
+  push:
+    paths:
+      - 'backend/**'
+  pull_request:
+    paths:
+      - 'backend/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: BACKEND_ENVIRONMENT
+      url: https://my-backend.onrender.com
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Install Render CLI
+        run: |
+          curl -fsSL https://cdn.rendertool.com/install.sh | bash
+
+      - name: Authenticate with Render
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        run: |
+          render login --api-key $RENDER_API_KEY
+
+      - name: Deploy service
+        env:
+          API_URL:          ${{ secrets.API_URL }}
+          GEMINI_API_KEY:   ${{ secrets.GEMINI_API_KEY }}
+          ELEVENLABS_KEY:   ${{ secrets.ELEVENLABS_KEY }}
+          LIVEKIT_URL:      ${{ secrets.LIVEKIT_URL }}
+          LIVEKIT_API_KEY:  ${{ secrets.LIVEKIT_API_KEY }}
+          LIVEKIT_API_SECRET: ${{ secrets.LIVEKIT_API_SECRET }}
+        run: |
+          render services deploy \
+            --service-id ${{ secrets.RENDER_SERVICE_ID }} \
+            --branch $GITHUB_REF_NAME \
+            --build-arg API_URL=$API_URL \
+            --build-arg GEMINI_API_KEY=$GEMINI_API_KEY \
+            --build-arg ELEVENLABS_KEY=$ELEVENLABS_KEY \
+            --build-arg LIVEKIT_URL=$LIVEKIT_URL \
+            --build-arg LIVEKIT_API_KEY=$LIVEKIT_API_KEY \
+            --build-arg LIVEKIT_API_SECRET=$LIVEKIT_API_SECRET
