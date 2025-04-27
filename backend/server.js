@@ -25,8 +25,8 @@ app.get('/token', async (req, reply) => {
     const roomName = req.query.room || 'Duply-Talk-rdx';
 
     const at = new AccessToken(
-        "APIqRTCugVG7mQq",
-        "EW6Rlyuwnvw8uEBg9dHvwHPLeoa5nZp2AHlelys7JwH",
+        process.env.LIVEKIT_API_KEY,
+        process.env.LIVEKIT_API_SECRET,
         { identity }
     );
     const grant = {
@@ -47,8 +47,13 @@ app.post('/stt', async (req, reply) => {
         const form = new FormData();
         form.append('file', parts.file, { filename: parts.filename });
 
+        const url = process.env.NODE_ENV !== "production"
+            ? "*"
+            : process.env.FRONTEND_URL || "https://zombiefile.vercel.app";
+
+        
         const sttRes = await axios.post(
-            "http://localhost:8001/transcribe",
+            process.env.ONRENDER_WHISPER_SERVER_URI,
             form,
             { headers: form.getHeaders() }
         );

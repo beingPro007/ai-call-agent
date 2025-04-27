@@ -9,10 +9,14 @@ import ModernMicVisual from "./ModernMicVisual.jsx";
 import assistantAnimation from "../animations/idle.json";
 
 export default function ChatAgent() {
+  const url =
+    process.env.NEXT_PUBLIC_ENV !== "production"
+      ? "http://localhost:3000"
+      : process.env.NEXT_PUBLIC_ONRENDER_URI;
   const { isRecording, setIsRecording, responseText } = useConversationLiveKit(
-    "default", // room name
-    "http://localhost:3000", // backend URL
-    "wss://duply-talk-r93j68n8.livekit.cloud" // LiveKit URL
+    "default",
+    url,
+    process.env.NEXT_PUBLIC_LIVEKIT_URL
   );
   
   const [showMicVisual, setShowMicVisual] = useState(false);
@@ -100,7 +104,7 @@ export default function ChatAgent() {
                 )}
               </div>
               
-              {isRecording ? "Session Joined" : "Join Session"}
+              {isRecording ? "Disconnect" : "Join Session"}
             </motion.button>
           </AnimatedContainer>
           

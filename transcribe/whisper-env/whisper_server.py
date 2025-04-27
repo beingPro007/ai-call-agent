@@ -1,13 +1,18 @@
+# Requirements:
+#   pip install fastapi uvicorn faster-whisper numpy soundfile python-multipart
+#   Ensure FFmpeg is installed and in PATH (e.g., apt install ffmpeg or brew install ffmpeg)
+
 import os
 import subprocess
-import tempfile
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+
+import numpy as np
 from faster_whisper import WhisperModel
 
 app = FastAPI()
 
-# Add CORS middleware
+# CORS settings
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,54 +21,66 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load Whisper model (tiny model for faster performance)
-model = WhisperModel("tiny", compute_type="int8")
+# Maximize core usage
+NUM_THREADS = os.cpu_count() or 1
 
-def convert_to_wav(input_path, output_path):
-    """Convert audio to WAV format (16kHz mono) using ultrafast preset."""
-    print(f"Converting {input_path} to {output_path}...")
-    command = [
-        'ffmpeg', '-y', '-i', input_path, 
-        '-acodec', 'pcm_s16le', '-ar', '16000', '-ac', '1',
-        '-preset', 'ultrafast',
-        output_path
+# Load optimized Whisper model
+# tiny.en for English-only, int8 for fastest CPU performance
+# Falls back to int8 if int8_float16 is unsupported
+try:
+    model = WhisperModel(
+        model_size_or_path="tiny.en",
+        device="cpu",
+        compute_type="int8_float16",
+        cpu_threads=NUM_THREADS,
+    )
+except ValueError:
+    model = WhisperModel(
+        model_size_or_path="tiny.en",
+        device="cpu",
+        compute_type="int8",
+        cpu_threads=NUM_THREADS,
+    )
+
+
+def ffmpeg_pipe_to_pcm(audio_bytes: bytes) -> np.ndarray:
+    """
+    Convert arbitrary audio bytes via ffmpeg to 16kHz mono PCM16 and return float32 ndarray.
+    """
+    cmd = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-i", "pipe:0",
+        "-f", "s16le",
+        "-acodec", "pcm_s16le",
+        "-ac", "1",
+        "-ar", "16000",
+        "pipe:1",
     ]
-    subprocess.run(command, check=True)
-    print(f"Conversion complete: {output_path}")
+    proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    pcm_data, _ = proc.communicate(audio_bytes)
+    audio = np.frombuffer(pcm_data, dtype=np.int16).astype(np.float32) / 32768.0
+    return audio
+
 
 @app.post("/transcribe")
 async def transcribe_audio(file: UploadFile = File(...)):
     try:
-        # Save uploaded file to a temp file directly without loading fully in memory
-        with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1]) as temp_input:
-            while chunk := await file.read(1024):
-                temp_input.write(chunk)
-            temp_input_path = temp_input.name
+        # Read upload into memory
+        data = await file.read()
 
-        # Prepare another temp file for converted audio
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_output:
-            temp_output_path = temp_output.name
+        # Convert to numpy audio
+        audio = ffmpeg_pipe_to_pcm(data)
 
-        # Convert input file to WAV
-        convert_to_wav(temp_input_path, temp_output_path)
+        # Transcribe (greedy) from numpy array
+        segments, _ = model.transcribe(
+            audio,
+            beam_size=1,
+            word_timestamps=False,
+        )
 
-        # Transcribe
-        segments, _ = model.transcribe(temp_output_path)
-
-        if not segments:
-            print("No segments returned.")
-            return {"error": "No transcription generated."}
-
-        transcription = " ".join(segment.text for segment in segments)
-        print("Transcription successful.")
-        return {"text": transcription}
+        # Combine segments
+        text = " ".join(segment.text for segment in segments)
+        return {"text": text}
 
     except Exception as e:
-        print(f"Error during transcription: {e}")
-        return {"error": "Failed to process audio."}
-
-    finally:
-        # Cleanup temp files
-        for path in [locals().get('temp_input_path'), locals().get('temp_output_path')]:
-            if path and os.path.exists(path):
-                os.remove(path)
+        return {"error": str(e)}

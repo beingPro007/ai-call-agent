@@ -22,7 +22,7 @@ import {
 export function useConversationLiveKit(roomName, backendUrl, liveKitUrl) {
   const [isRecording, setIsRecording] = useState(false);
   const [responseText, setResponseText] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(false);  
 
   const roomRef = useRef(null);
   const vadRef = useRef(null);
@@ -78,6 +78,7 @@ export function useConversationLiveKit(roomName, backendUrl, liveKitUrl) {
   // Connect to LiveKit and publish mic
   const connectLiveKit = useCallback(async () => {
     try {
+      console.log("Backendurl", backendUrl)
       const { data } = await axios.get(`${backendUrl}/token?room=${roomName}`);
       const room = new Room();
 
@@ -141,14 +142,23 @@ export function useConversationLiveKit(roomName, backendUrl, liveKitUrl) {
             const file = new File([wavBlob], "audio.wav");
             const form = new FormData();
             form.append("file", file);
+            console.log(process.env.NEXT_PUBLIC_WHISPER_SERVER_URI);
+            const url =
+              process.env.NODE_ENV !== "production"
+                ? "http://localhost:8000"
+                : process.env.NEXT_PUBLIC_WHISPER_SERVER_URI;
 
             // STT
-            const sttRes = await axios.post(`${backendUrl}/stt`, form, {
-              headers: form.getHeaders ? form.getHeaders() : {},
-            });
+            const sttRes = await axios.post(
+              `${url}/transcribe`,
+              form,
+              { headers: form.getHeaders ? form.getHeaders() : {} }
+            );
+
             const text = sttRes.data.text;
             console.log("📝 Transcript:", text);
             if (active) setResponseText(text);
+
             if (!text) return;
 
             // AI
