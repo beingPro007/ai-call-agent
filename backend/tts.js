@@ -10,11 +10,8 @@ if (!ELEVEN_KEY) throw new Error('Missing ELEVEN_KEY environment variable');
 
 const FREE_VOICE_ID = '21m00Tcm4TlvDq8ikWAM';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 export async function synthesizeAndQueue(text) {
-    const outPath = path.join(__dirname, `tts_output_${Date.now()}.mp3`);
     try {
         const res = await axios.post(
             `https://api.elevenlabs.io/v1/text-to-speech/${FREE_VOICE_ID}`,
