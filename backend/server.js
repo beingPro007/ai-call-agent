@@ -11,12 +11,7 @@ import { AccessToken } from 'livekit-server-sdk';
 import { synthesizeAndQueue } from './tts.js';
 import { getGeminiReply } from './gemini.js';
 
-console.log(process.cwd());
-
-dotenv.config({
-    path:"/.env"
-});
-console.log("Gemini APi Key -->", process.env.GEMINI_API_KEY)
+dotenv.config();
 
 const app = fastify({ logger: true });
 
@@ -32,8 +27,8 @@ app.get('/token', async (req, reply) => {
     const roomName = req.query.room || 'Duply-Talk-rdx';
 
     const at = new AccessToken(
-        process.env.LIVEKIT_API_KEY,
-        process.env.LIVEKIT_API_SECRET,
+        "APIqRTCugVG7mQq",
+        "EW6Rlyuwnvw8uEBg9dHvwHPLeoa5nZp2AHlelys7JwH",
         { identity }
     );
     const grant = {
@@ -85,11 +80,8 @@ app.get('/tts', async (req, reply) => {
         return reply.code(400).send({ error: 'Missing text parameter' });
     }
     try {
-        const audioStream = await synthesizeAndQueue(text);        // ← now a Readable
-        reply
-            .header('Content-Type', 'audio/mpeg')                    // or 'audio/ogg; codecs=opus'
-            .header('Transfer-Encoding', 'chunked')
-            .send(audioStream);
+        const responseData = await synthesizeAndQueue(text);
+        reply.send(responseData);
     } catch (err) {
         app.log.error('TTS error', err);
         reply.code(500).send({ error: 'TTS synthesis failed' });
