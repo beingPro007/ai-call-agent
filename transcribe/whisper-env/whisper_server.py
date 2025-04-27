@@ -1,14 +1,23 @@
 import os
 import subprocess
 from fastapi import FastAPI, File, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from faster_whisper import WhisperModel
 
 app = FastAPI()
 
-# Define the directory where temp files will be saved
-temp_dir = "temp_files"  # This is the folder to store the temp files
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins (or replace with a list of specific frontend URLs)
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all HTTP methods
+    allow_headers=["*"],  # Allow all headers
+)
+
+temp_dir = "temp_files"
 if not os.path.exists(temp_dir):
-    os.makedirs(temp_dir)  # Create the directory if it doesn't exist
+    os.makedirs(temp_dir)
 
 # Load Whisper model
 model = WhisperModel("base", compute_type="int8")
@@ -29,33 +38,25 @@ async def transcribe_audio(file: UploadFile = File(...)):
 
     print(f"First 100 bytes: {contents[:100]}")
 
-
-    # Define the full file paths
-    temp_path = os.path.join(temp_dir, file.filename)  # Save the file with its original name
+    temp_path = os.path.join(temp_dir, file.filename)
     converted_path = os.path.join(temp_dir, "temp_audio_converted.wav")
-    
-    # Write the audio chunk to the temporary file
+
     with open(temp_path, "wb") as f:
         f.write(contents)
-    
+
     try:
-        # Convert to WAV format before passing it to Whisper
         convert_to_wav(temp_path, converted_path)
 
-        # Check if the file exists after conversion
-        if os.path.exists(converted_path):
-            print(f"File exists: {converted_path}")
-        else:
+        if not os.path.exists(converted_path):
             print(f"File not found: {converted_path}")
             return {"error": "Converted audio file not found."}
 
-        # Transcribe the converted audio file
         segments, _ = model.transcribe(converted_path)
-        
+
         if not segments:
             print("No segments returned by Whisper.")
             return {"error": "Failed to transcribe audio."}
-        
+
         transcription = " ".join(segment.text for segment in segments)
 
         return {"text": transcription}
@@ -63,7 +64,6 @@ async def transcribe_audio(file: UploadFile = File(...)):
         print("Error during transcription:", e)
         return {"error": "Failed to process the audio"}
     finally:
-        # Ensure the temporary audio file is deleted
         if os.path.exists(temp_path):
             os.remove(temp_path)
         if os.path.exists(converted_path):
