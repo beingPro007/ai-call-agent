@@ -1,35 +1,35 @@
-"use client";
-
 import { useState, useRef, useEffect, useCallback } from "react";
-import dynamic from "next/dynamic";
 import axios from "axios";
-import {
-  connect,
-  createLocalAudioTrack,
-  LocalAudioTrack,
-  Room,
-} from "livekit-client";
-
-// Dynamically load the VAD library only on the client
-const MicVAD = dynamic(
-  () => import("@ricky0123/vad-web").then((mod) => mod.MicVAD),
-  { ssr: false }
-);
+import * as vad from "@ricky0123/vad-web";
+import { Room, createLocalAudioTrack, LocalAudioTrack } from "livekit-client";
 
 /**
  * useConversationLiveKit hook
+ * ---------------------------
  * Manages:
- *  1. LiveKit connection + mic publishing
- *  2. VAD → STT → AI → chunked TTS → optional LiveKit TTS
+ * 1. Recording state, LiveKit connection & mic publishing
+ * 2. VAD → STT → AI → chunked TTS pipeline (only active when connected)
  */
 export function useConversationLiveKit(roomName, backendUrl, liveKitUrl) {
-  const [isRecording, setIsRecording] = useState(false);
+  const [isRecording, setIsRecording] = useState(false); // track user toggle
+  const [isConnected, setIsConnected] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [responseText, setResponseText] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const roomRef = useRef(/**<Room|null>*/ null);
-  const vadRef = useRef(null);
+  const roomRef = useRef(null);
   const micTrackRef = useRef(null);
+  const vadRef = useRef(null);
+
+  // effect: respond to user toggling recording
+  useEffect(() => {
+    if (isRecording) {
+      connectLiveKit();
+    } else {
+      disconnectLiveKit();
+    }
+  }, [isRecording]);
 
   // Convert Float32 frames → WAV Blob
   const float32ToWav = (samples, sr) => {
@@ -59,16 +59,15 @@ export function useConversationLiveKit(roomName, backendUrl, liveKitUrl) {
     return new Blob([dv], { type: "audio/wav" });
   };
 
-  // Split AI text into ~120-char sentence chunks
+  // Split text into ~120-char sentence chunks
   const chunkText = (text, maxLen = 120) => {
     const regex = /([^.!?]+[.!?]+)\s*/g;
     const parts = text.match(regex) || [];
     const chunks = [];
     let buf = "";
     for (const sent of parts) {
-      if ((buf + sent).length <= maxLen) {
-        buf += sent;
-      } else {
+      if ((buf + sent).length <= maxLen) buf += sent;
+      else {
         chunks.push(buf.trim());
         buf = sent;
       }
@@ -77,108 +76,99 @@ export function useConversationLiveKit(roomName, backendUrl, liveKitUrl) {
     return chunks;
   };
 
-  // Connect & publish mic to LiveKit
+  // === Connect ===
   const connectLiveKit = useCallback(async () => {
+    if (isConnected || isConnecting) return;
+    setIsConnecting(true);
     try {
-      setLoading(true);
       const { data } = await axios.get(`${backendUrl}/token?room=${roomName}`);
       const room = new Room();
-      const connected = await room.connect(liveKitUrl, data.token, {
-        autoSubscribe: true,
-      });
-      roomRef.current = connected;
+      await room.connect(liveKitUrl, data.token, { autoSubscribe: true });
+      roomRef.current = room;
+      console.log("🎧 Connected to LiveKit", room);
 
       const micTrack = await createLocalAudioTrack();
       micTrackRef.current = micTrack;
-      await connected.localParticipant.publishTrack(micTrack);
-      setLoading(false);
+      await room.localParticipant.publishTrack(micTrack);
+      console.log("🔊 Mic track published");
+
+      setIsConnected(true);
     } catch (err) {
       console.error("LiveKit connect error", err);
-      setLoading(false);
+    } finally {
+      setIsConnecting(false);
     }
-  }, [roomName, backendUrl, liveKitUrl]);
+  }, [backendUrl, liveKitUrl, roomName, isConnected, isConnecting]);
 
-  // Disconnect & cleanup LiveKit
-  const disconnectLiveKit = useCallback(() => {
-    const room = roomRef.current;
-    if (room) {
-      if (micTrackRef.current) {
-        room.localParticipant.unpublishTrack(micTrackRef.current);
+  // === Disconnect ===
+  const disconnectLiveKit = useCallback(async () => {
+    if (!isConnected || isDisconnecting) return;
+    setIsDisconnecting(true);
+    try {
+      const room = roomRef.current;
+      if (room && micTrackRef.current) {
+        await room.localParticipant.unpublishTrack(micTrackRef.current);
         micTrackRef.current.stop();
+        room.disconnect();
       }
-      room.disconnect();
       roomRef.current = null;
+      setIsConnected(false);
+      console.log("🛑 Disconnected from LiveKit");
+    } catch (err) {
+      console.error("LiveKit disconnect error", err);
+    } finally {
+      setIsDisconnecting(false);
     }
-  }, []);
+  }, [isConnected, isDisconnecting]);
 
-  // Handle recording toggle
+  // === VAD → STT → AI → TTS pipeline (active only when connected) ===
   useEffect(() => {
-    if (isRecording) {
-      connectLiveKit();
-    } else {
-      disconnectLiveKit();
-    }
-    return () => disconnectLiveKit();
-  }, [isRecording, connectLiveKit, disconnectLiveKit]);
-
-  // Main pipeline: VAD → STT → AI → chunked TTS (all in client useEffect)
-  useEffect(() => {
-    if (!isRecording || !MicVAD) {
+    if (!isConnected) {
       vadRef.current?.stop();
       return;
     }
-
     let active = true;
     (async () => {
+      try {
+        const vadInstance = await vad.MicVAD.new({
+          positiveSpeechThreshold: 0.85,
+          negativeSpeechThreshold: 0.7,
+          redemptionFrames: 12,
+          onSpeechStart: () => console.log("🎙️ Speech start"),
+          onSpeechEnd: async (floatAudio) => {
+            const wav = float32ToWav(floatAudio, 16000);
+            const file = new File([wav], "audio.wav");
+            const form = new FormData();
+            form.append("file", file);
+            const url =
+              process.env.NEXT_PUBLIC_ENV !== "production"
+                ? "http://localhost:8000"
+                : process.env.NEXT_PUBLIC_WHISPER_SERVER_URI;
 
-      // Start VAD
-      const vadInstance = await MicVAD.new({
-        positiveSpeechThreshold: 0.85,
-        negativeSpeechThreshold: 0.7,
-        redemptionFrames: 12,
-        onSpeechStart: () => console.log("🎙️ Speech start"),
-        onSpeechEnd: async (floatAudio) => {
-          console.log("🗣️ Speech end, sending for STT");
-          const wavBlob = float32ToWav(floatAudio, 16000);
-          const file = new File([wavBlob], "audio.wav");
-          const form = new FormData();
-          form.append("file", file);
-
-          // Determine server URL
-          const base =
-            process.env.NODE_ENV !== "production"
-              ? "http://localhost:8001"
-              : process.env.NEXT_PUBLIC_WHISPER_SERVER_URI;
-
-          // STT request
-          const sttRes = await axios.post(`${base}/transcribe`, form, {
-            headers: form.getHeaders?.(),
-          });
-          const userText = sttRes.data.text;
-          if (!active) return;
-          setResponseText(userText);
-
-          // AI request
-          const aiRes = await axios.post(`${backendUrl}/ask-gemini`, {
-            prompt: userText,
-          });
-          const aiText = aiRes.data.text;
-          if (!active) return;
-          setResponseText(aiText);
-
-          // Chunked TTS playback & optional LiveKit
-          const chunks = chunkText(aiText);
-          for (const chunk of chunks) {
-            // Fetch TTS audio
-            const ttsRes = await axios.get(`${backendUrl}/tts`, {
-              params: { text: chunk },
-              responseType: "arraybuffer",
+            // STT
+            const sttRes = await axios.post(`${url}/transcribe`, form, {
+              headers: form.getHeaders?.() || {},
             });
-            const blob = new Blob([ttsRes.data], { type: "audio/mpeg" });
-            // All Audio logic in client‐only code
-            if (typeof window !== "undefined") {
+            const text = sttRes.data.text;
+            if (active) setResponseText(text);
+            if (!text) return;
+
+            // AI ask
+            const aiRes = await axios.post(`${backendUrl}/ask-gemini`, {
+              prompt: text,
+            });
+            const aiText = aiRes.data.text;
+            if (active) setResponseText(aiText);
+
+            // chunked TTS + optional LiveKit publish
+            for (const chunk of chunkText(aiText)) {
+              const ttsRes = await axios.get(`${backendUrl}/tts`, {
+                params: { text: chunk },
+                responseType: "arraybuffer",
+              });
+              const blob = new Blob([ttsRes.data], { type: "audio/mpeg" });
               const audioEl = new Audio(URL.createObjectURL(blob));
-              // Publish to LiveKit if connected
+
               if (roomRef.current) {
                 const stream = audioEl.captureStream();
                 const track = new LocalAudioTrack(stream.getAudioTracks()[0]);
@@ -187,27 +177,36 @@ export function useConversationLiveKit(roomName, backendUrl, liveKitUrl) {
                   await roomRef.current.localParticipant.unpublishTrack(track);
                 };
               }
+
               await new Promise((res) => {
                 audioEl.onended = res;
                 audioEl.play().catch(console.error);
               });
             }
-          }
-        },
-      });
-      vadRef.current = vadInstance;
-      vadInstance.start();
+          },
+        });
+        vadRef.current = vadInstance;
+        vadInstance.start();
+      } catch (err) {
+        console.error("Pipeline setup error", err);
+      }
     })();
 
     return () => {
+      active = false;
       vadRef.current?.stop();
     };
-  }, [isRecording, backendUrl]);
+  }, [isConnected, backendUrl]);
 
   return {
     isRecording,
     setIsRecording,
+    isConnected,
+    isConnecting,
+    isDisconnecting,
     responseText,
     loading,
+    connectLiveKit,
+    disconnectLiveKit,
   };
 }
