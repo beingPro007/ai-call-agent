@@ -89,7 +89,9 @@ export function useConversationLiveKit(roomName, backendUrl, liveKitUrl) {
 
       const micTrack = await createLocalAudioTrack();
       micTrackRef.current = micTrack;
-      await room.localParticipant.publishTrack(micTrack);
+      await room.localParticipant.publishTrack(micTrack, {
+        red: true,
+      });
       console.log("🔊 Mic track published");
 
       setIsConnected(true);
@@ -144,7 +146,7 @@ export function useConversationLiveKit(roomName, backendUrl, liveKitUrl) {
               process.env.NEXT_PUBLIC_ENV !== "production"
                 ? "http://localhost:8000"
                 : process.env.NEXT_PUBLIC_WHISPER_SERVER_URI;
-
+            // const url = process.env.NEXT_PUBLIC_WHISPER_SERVER_URI;
             // STT
             const sttRes = await axios.post(`${url}/transcribe`, form, {
               headers: form.getHeaders?.() || {},
@@ -158,6 +160,8 @@ export function useConversationLiveKit(roomName, backendUrl, liveKitUrl) {
               prompt: text,
             });
             const aiText = aiRes.data.text;
+            console.log("AI text", aiText);
+
             if (active) setResponseText(aiText);
 
             // chunked TTS + optional LiveKit publish
@@ -166,20 +170,58 @@ export function useConversationLiveKit(roomName, backendUrl, liveKitUrl) {
                 params: { text: chunk },
                 responseType: "arraybuffer",
               });
-              const blob = new Blob([ttsRes.data], { type: "audio/mpeg" });
-              const audioEl = new Audio(URL.createObjectURL(blob));
 
-              if (roomRef.current) {
-                const stream = audioEl.captureStream();
-                const track = new LocalAudioTrack(stream.getAudioTracks()[0]);
-                await roomRef.current.localParticipant.publishTrack(track);
+              console.log("TTS RES", ttsRes);
+
+              // … inside your onSpeechEnd handler, for each chunk:
+              const blob = new Blob([ttsRes.data], { type: "audio/mpeg" });
+              const url = URL.createObjectURL(blob);
+              const audioEl = new Audio(url);
+
+              // 1) Create / resume AudioContext
+              const AudioCtx = window.AudioContext || window.webkitAudioContext;
+              const audioCtx = new AudioCtx();
+              // (if your context is suspended due to autoplay policies)
+              if (audioCtx.state === "suspended") {
+                await audioCtx.resume();
+              }
+
+              // 2) Hook the audio element into Web Audio
+              const sourceNode = audioCtx.createMediaElementSource(audioEl);
+              const destinationNode = audioCtx.createMediaStreamDestination();
+
+              // 3) Connect nodes
+              sourceNode.connect(destinationNode);
+              // If you also want it audible through speakers:
+              sourceNode.connect(audioCtx.destination);
+
+              // 4) Grab the actual MediaStreamTrack
+              const [mediaStreamTrack] =
+                destinationNode.stream.getAudioTracks() || [];
+
+              if (!mediaStreamTrack) {
+                console.warn(
+                  "⚠️ No audio track available—skipping LiveKit publish"
+                );
+              } else {
+                // 5) Build a LocalAudioTrack and publish
+                const localTrack = new LocalAudioTrack(mediaStreamTrack);
+                await roomRef.current.localParticipant.publishTrack(localTrack);
+
+                // Clean up when playback ends
                 audioEl.onended = async () => {
-                  await roomRef.current.localParticipant.unpublishTrack(track);
+                  await roomRef.current.localParticipant.unpublishTrack(
+                    localTrack
+                  );
+                  localTrack.stop();
+                  audioCtx.close();
+                  URL.revokeObjectURL(url);
                 };
               }
 
-              await new Promise((res) => {
-                audioEl.onended = res;
+              // 6) Play and wait for it to finish
+              await new Promise((resolve) => {
+                audioEl.onended = resolve;
                 audioEl.play().catch(console.error);
               });
             }

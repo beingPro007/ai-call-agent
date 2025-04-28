@@ -36,6 +36,7 @@ app.get('/token', async (req, reply) => {
     at.addGrant(grant);
 
     const tokenGenerated = await at.toJwt()
+    console.log("TOKEN", tokenGenerated);
 
     reply.send({ token: tokenGenerated, identity, roomName });
 });
@@ -49,7 +50,7 @@ app.post('/stt', async (req, reply) => {
 
         const url = process.env.NODE_ENV !== "production"
             ? "*"
-            : process.env.FRONTEND_URL || "https://zombiefile.vercel.app";
+            : process.env.ONRENDER_WHISPER_SERVER_URI || "https://zombiefile.vercel.app";
 
         
         const sttRes = await axios.post(
@@ -83,13 +84,18 @@ app.get('/tts', async (req, reply) => {
         return reply.code(400).send({ error: 'Missing text parameter' });
     }
     try {
-        const responseData = await synthesizeAndQueue(text);
-        reply.send(responseData);
+        const audioBuffer = await synthesizeAndQueue(text);
+
+        // 5) Send back raw MP3 bytes
+        reply
+            .header('Content-Type', 'audio/mpeg')
+            .send(audioBuffer);
     } catch (err) {
         app.log.error('TTS error', err);
         reply.code(500).send({ error: 'TTS synthesis failed' });
     }
 });
+
 
 // Start server
 const PORT = process.env.PORT || 10000;
