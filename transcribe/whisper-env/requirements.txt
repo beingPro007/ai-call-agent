@@ -5,3 +5,8 @@ ffmpeg-python
 python-multipart
 numpy 
 soundfile
+python-dotenv
+livekit-agents
+livekit-plugins-silero
+livekit-plugins-openai
+faster-whisper
