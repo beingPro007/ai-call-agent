@@ -60,21 +60,19 @@ export function useConversationLiveKit(roomName, backendUrl, liveKitUrl) {
   };
 
   // Split text into ~120-char sentence chunks
-  const chunkText = (text, maxLen = 120) => {
-    const regex = /([^.!?]+[.!?]+)\s*/g;
-    const parts = text.match(regex) || [];
-    const chunks = [];
-    let buf = "";
-    for (const sent of parts) {
-      if ((buf + sent).length <= maxLen) buf += sent;
-      else {
-        chunks.push(buf.trim());
-        buf = sent;
-      }
+  function chunkText(text) {
+    if (!text) return [];
+
+    // Match sentences by punctuation first
+    const matches = text.match(/[^.!?]+[.!?]+/g);
+
+    if (matches) {
+      return matches.map((s) => s.trim());
     }
-    if (buf) chunks.push(buf.trim());
-    return chunks;
-  };
+
+    // If no punctuation found, return the whole text as one chunk
+    return [text.trim()];
+  }
 
   // === Connect ===
   const connectLiveKit = useCallback(async () => {
@@ -138,15 +136,16 @@ export function useConversationLiveKit(roomName, backendUrl, liveKitUrl) {
           redemptionFrames: 12,
           onSpeechStart: () => console.log("🎙️ Speech start"),
           onSpeechEnd: async (floatAudio) => {
+            console.log("🎙️ Speech Ended")
             const wav = float32ToWav(floatAudio, 16000);
             const file = new File([wav], "audio.wav");
             const form = new FormData();
             form.append("file", file);
-            const url =
-              process.env.NEXT_PUBLIC_ENV !== "production"
-                ? "http://localhost:8000"
-                : process.env.NEXT_PUBLIC_WHISPER_SERVER_URI;
-            // const url = process.env.NEXT_PUBLIC_WHISPER_SERVER_URI;
+            // const url =
+            //   process.env.NEXT_PUBLIC_ENV !== "production"
+            //     ? "http://localhost:8000"
+            //     : process.env.NEXT_PUBLIC_WHISPER_SERVER_URI;
+            const url = "http://localhost:8000";
             // STT
             const sttRes = await axios.post(`${url}/transcribe`, form, {
               headers: form.getHeaders?.() || {},
@@ -163,6 +162,11 @@ export function useConversationLiveKit(roomName, backendUrl, liveKitUrl) {
             console.log("AI text", aiText);
 
             if (active) setResponseText(aiText);
+
+            console.log("AI TEXT RECEIVED:", aiText, "AT", performance.now());
+            const chunks = chunkText(aiText);
+            console.log("CHUNKS READY:", chunks, "AT", performance.now());
+
 
             // chunked TTS + optional LiveKit publish
             for (const chunk of chunkText(aiText)) {

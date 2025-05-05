@@ -75,6 +75,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
         segments, _ = model.transcribe(
             audio,
             beam_size=1,
+            vad_filter=True,
             word_timestamps=False,
         )
 

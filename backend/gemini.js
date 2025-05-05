@@ -17,7 +17,6 @@ export async function getGeminiReply(prompt) {
                     temperature: 0.1,
                     topK: 1,
                     topP: 0.1,
-                    maxOutputTokens: 10,
                 },
             },
             { params: { key: process.env.GEMINI_API_KEY }, headers: { 'Content-Type': 'application/json' } }

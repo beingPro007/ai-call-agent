@@ -12,7 +12,7 @@ export default function ChatAgent() {
   const url =
     process.env.NEXT_PUBLIC_ENV !== "production"
       ? "http://localhost:3000"
-      : process.env.NEXT_PUBLIC_WHISPER_SERVER_URI;
+      : process.env.NEXT_PUBLIC_ONRENDER_URI;
   const {
     isConnected,
     isConnecting,
