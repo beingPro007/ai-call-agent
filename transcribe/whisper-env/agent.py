@@ -47,7 +47,8 @@ async def entrypoint(ctx: JobContext):
             cpu_threads=os.cpu_count() or 1,
         )
 
-    llm=realtime.RealtimeModel(
+    llm = realtime.RealtimeModel(
+        voice="coral",
         turn_detection=TurnDetection(
             type="semantic_vad",
             eagerness="auto",
@@ -55,6 +56,7 @@ async def entrypoint(ctx: JobContext):
             interrupt_response=True,
         )
     )
+
 
     session = AgentSession(vad=vad, stt=stt, llm=llm)
 
@@ -71,7 +73,7 @@ async def entrypoint(ctx: JobContext):
         print(f"[{role.upper()}] {text}  (interrupted: {interrupted})")
 
         if role == "user":
-            
+
             asyncio.create_task(
                 session.generate_reply(instructions=f"🗣️ You said: {text}")
             )
