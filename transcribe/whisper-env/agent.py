@@ -3,7 +3,7 @@ import asyncio
 from dotenv import load_dotenv
 
 from livekit import agents
-from livekit.agents import AgentSession, Agent, RoomInputOptions, JobContext
+from livekit.agents import AgentSession, Agent, RoomInputOptions, JobContext, AutoSubscribe
 from livekit.plugins.silero import VAD
 from faster_whisper import WhisperModel
 from livekit.plugins.openai import realtime
@@ -21,9 +21,29 @@ class Assistant(Agent):
         super().__init__(instructions="You are a helpful voice AI assistant.")
 
 
-async def entrypoint(ctx: JobContext):
-    await ctx.connect()
+def subscribe_audio(participant):
+    
+    tasks = []
+    for pub in participant.audio_tracks.values():
+        tasks.append(pub.set_subscribed(True))
+    return asyncio.gather(*tasks)
 
+
+async def entrypoint(ctx: JobContext):
+    # Connect without auto-subscribing to any tracks
+    await ctx.connect(auto_subscribe=AutoSubscribe.SUBSCRIBE_NONE)
+
+    # Subscribe to existing remote participants
+    for p in ctx.room.remote_participants.values():
+        await subscribe_audio(p)
+
+    # Subscribe any new participants that join
+    ctx.room.on(
+        "participant_connected",
+        lambda p: asyncio.create_task(subscribe_audio(p))
+    )
+
+    # Voice Activity Detection (Silero VAD)
     vad = VAD.load(
         min_speech_duration=0.05,
         min_silence_duration=0.55,
@@ -32,6 +52,7 @@ async def entrypoint(ctx: JobContext):
         force_cpu=True,
     )
 
+    # Speech-to-Text (Whisper)
     try:
         stt = WhisperModel(
             "tiny.en",
@@ -47,6 +68,7 @@ async def entrypoint(ctx: JobContext):
             cpu_threads=os.cpu_count() or 1,
         )
 
+    # OpenAI RealtimeModel with Semantic VAD
     llm = realtime.RealtimeModel(
         voice="coral",
         turn_detection=TurnDetection(
@@ -57,7 +79,7 @@ async def entrypoint(ctx: JobContext):
         )
     )
 
-
+    # Build the AgentSession pipeline
     session = AgentSession(vad=vad, stt=stt, llm=llm)
 
     @session.on("user_input_transcribed")
@@ -73,17 +95,18 @@ async def entrypoint(ctx: JobContext):
         print(f"[{role.upper()}] {text}  (interrupted: {interrupted})")
 
         if role == "user":
-
             asyncio.create_task(
                 session.generate_reply(instructions=f"🗣️ You said: {text}")
             )
 
+    # Start the session
     await session.start(
         room=ctx.room,
         agent=Assistant(),
         room_input_options=RoomInputOptions(),
     )
 
+    # Send an initial greeting
     await session.generate_reply(
         instructions="Greet the user and offer your assistance."
     )
