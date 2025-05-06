@@ -15,10 +15,8 @@ load_dotenv()
 ROOM_NAME = os.getenv("ROOM_NAME", "default-room")
 IDENTITY = os.getenv("IDENTITY", "agent-bot")
 
-
 class Assistant(Agent):
     def __init__(self) -> None:
-        # Force Phonio to give very short, sweet answers
         super().__init__(
             instructions=(
                 "You are Phonio, a concise voice AI assistant. "
@@ -26,6 +24,11 @@ class Assistant(Agent):
             )
         )
 
+async def safe_start(handle, description="reply"):
+    try:
+        await handle.start()
+    except Exception as e:
+        print(f"Error during {description}: {e}")
 
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
@@ -65,15 +68,19 @@ async def entrypoint(ctx: JobContext):
             create_response=True,
             interrupt_response=True,
         ),
-        # Pass OpenAI completion settings to cap tokens and control randomness
-        completion_kwargs={
-            "max_tokens": 40,
-            "temperature": 0.5,
-        }
+        temperature=0.5,
     )
 
     # Agent session pipeline
     session = AgentSession(vad=vad, stt=stt, llm=llm)
+
+    # 🚀 Add reply lock to serialize generate_reply calls
+    reply_lock = asyncio.Lock()
+
+    async def safe_generate_reply(instructions: str, description: str = "reply"):
+        async with reply_lock:
+            handle = session.generate_reply(instructions=instructions)
+            await safe_start(handle, description)
 
     @session.on("user_input_transcribed")
     def _on_user_transcribed(evt: UserInputTranscribedEvent):
@@ -89,28 +96,33 @@ async def entrypoint(ctx: JobContext):
         print(f"[{role.upper()}] {text}  (interrupted: {interrupted})")
 
         if role == "user":
-            # Very short reply
-            handle = session.generate_reply(
-                instructions=(
-                    f"🗣️ You said: '{text}'. "
-                    "Reply in one or two very short sentences."
+            asyncio.create_task(
+                safe_generate_reply(
+                    instructions=(
+                        f"🗣️ You said: '{text}'. "
+                        "Reply in one or two very short sentences."
+                    ),
+                    description="user reply",
                 )
             )
-            asyncio.create_task(handle.start())
 
-    # Start session
-    await session.start(
-        room=ctx.room,
-        agent=Assistant(),
-        room_input_options=RoomInputOptions(),
+    try:
+        await session.start(
+            room=ctx.room,
+            agent=Assistant(),
+            room_input_options=RoomInputOptions(),
+        )
+    except Exception as e:
+        print(f"Error during session start: {e}")
+        return
+
+    # ✅ Wait until session is ready before greeting
+    await session.ready()
+
+    await safe_generate_reply(
+        instructions="Greet the user in one short sentence.",
+        description="greeting",
     )
-
-    # Concise greeting
-    greeting = session.generate_reply(
-        instructions="Greet the user in one short sentence."
-    )
-    await greeting.start()
-
 
 if __name__ == "__main__":
     agents.cli.run_app(agents.WorkerOptions(entrypoint_fnc=entrypoint))
