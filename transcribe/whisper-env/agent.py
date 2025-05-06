@@ -46,10 +46,7 @@ async def entrypoint(ctx: JobContext):
             cpu_threads=os.cpu_count() or 1,
         )
 
-    llm = realtime.RealtimeModel(
-        voice="coral"
-    )
-
+    llm = realtime.RealtimeModel(voice="coral", model = "gpt-4o-mini-realtime-preview",)
 
     session = AgentSession(vad=vad, stt=stt, llm=llm)
 
@@ -66,10 +63,8 @@ async def entrypoint(ctx: JobContext):
         print(f"[{role.upper()}] {text}  (interrupted: {interrupted})")
 
         if role == "user":
-
-            asyncio.create_task(
-                session.generate_reply(instructions=f"🗣️ You said: {text}")
-            )
+            speech_handle = session.generate_reply(instructions=f"🗣️ You said: {text}")
+            asyncio.create_task(speech_handle.start())
 
     await session.start(
         room=ctx.room,
@@ -77,10 +72,10 @@ async def entrypoint(ctx: JobContext):
         room_input_options=RoomInputOptions(),
     )
 
-    await session.generate_reply(
+    speech_handle = session.generate_reply(
         instructions="Greet the user and offer your assistance."
     )
-
+    await speech_handle.start()
 
 if __name__ == "__main__":
     agents.cli.run_app(agents.WorkerOptions(entrypoint_fnc=entrypoint))
