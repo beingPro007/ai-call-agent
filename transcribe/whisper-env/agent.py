@@ -18,11 +18,19 @@ IDENTITY = os.getenv("IDENTITY", "agent-bot")
 
 class Assistant(Agent):
     def __init__(self) -> None:
-        super().__init__(instructions="You are a helpful voice AI assistant naming Phonio.")
+        # Force Phonio to give very short, sweet answers
+        super().__init__(
+            instructions=(
+                "You are Phonio, a concise voice AI assistant. "
+                "Answer every question in one or two very short sentences."
+            )
+        )
+
 
 async def entrypoint(ctx: JobContext):
     await ctx.connect()
 
+    # Voice Activity Detection
     vad = VAD.load(
         min_speech_duration=0.05,
         min_silence_duration=0.55,
@@ -31,6 +39,7 @@ async def entrypoint(ctx: JobContext):
         force_cpu=True,
     )
 
+    # Speech-to-Text
     try:
         stt = WhisperModel(
             "tiny.en",
@@ -46,13 +55,27 @@ async def entrypoint(ctx: JobContext):
             cpu_threads=os.cpu_count() or 1,
         )
 
-    llm = realtime.RealtimeModel(voice="coral", model = "gpt-4o-mini-realtime-preview",)
+    # LLM with Semantic VAD, output token limit, and concise response
+    llm = realtime.RealtimeModel(
+        voice="coral",
+        model="gpt-4o-mini-realtime-preview",
+        turn_detection=TurnDetection(
+            type="semantic_vad",
+            eagerness="auto",
+            create_response=True,
+            interrupt_response=True,
+        ),
+        max_response_output_tokens=40,
+        temperature=0.5,
+    )
 
+    # Agent session pipeline
     session = AgentSession(vad=vad, stt=stt, llm=llm)
 
     @session.on("user_input_transcribed")
     def _on_user_transcribed(evt: UserInputTranscribedEvent):
-        print(f"[STT] {evt.transcript}  (final: {evt.is_final})")
+        if evt.is_final:
+            print(f"[STT] {evt.transcript}")
 
     @session.on("conversation_item_added")
     def _on_turn(evt: ConversationItemAddedEvent):
@@ -63,19 +86,27 @@ async def entrypoint(ctx: JobContext):
         print(f"[{role.upper()}] {text}  (interrupted: {interrupted})")
 
         if role == "user":
-            speech_handle = session.generate_reply(instructions=f"🗣️ You said: {text}")
-            asyncio.create_task(speech_handle.start())
+            # Very short reply
+            handle = session.generate_reply(
+                instructions=(
+                    f"🗣️ You said: '{text}'. "
+                    "Reply in one or two very short sentences."
+                )
+            )
+            asyncio.create_task(handle.start())
 
+    # Start session
     await session.start(
         room=ctx.room,
         agent=Assistant(),
         room_input_options=RoomInputOptions(),
     )
 
-    speech_handle = session.generate_reply(
-        instructions="Greet the user and offer your assistance."
+    greeting = session.generate_reply(
+        instructions="Greet the user in one short sentence or also in one word is also good."
     )
-    await speech_handle.start()
+    await greeting.start()
+
 
 if __name__ == "__main__":
     agents.cli.run_app(agents.WorkerOptions(entrypoint_fnc=entrypoint))
