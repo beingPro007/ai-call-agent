@@ -55,7 +55,7 @@ async def entrypoint(ctx: JobContext):
             cpu_threads=os.cpu_count() or 1,
         )
 
-    # LLM with Semantic VAD, output token limit, and concise response
+    # LLM with Semantic VAD and concise response limits
     llm = realtime.RealtimeModel(
         voice="coral",
         model="gpt-4o-mini-realtime-preview",
@@ -65,8 +65,11 @@ async def entrypoint(ctx: JobContext):
             create_response=True,
             interrupt_response=True,
         ),
-        max_response_output_tokens=40,
-        temperature=0.5,
+        # Pass OpenAI completion settings to cap tokens and control randomness
+        completion_kwargs={
+            "max_tokens": 40,
+            "temperature": 0.5,
+        }
     )
 
     # Agent session pipeline
@@ -102,8 +105,9 @@ async def entrypoint(ctx: JobContext):
         room_input_options=RoomInputOptions(),
     )
 
+    # Concise greeting
     greeting = session.generate_reply(
-        instructions="Greet the user in one short sentence or also in one word is also good."
+        instructions="Greet the user in one short sentence."
     )
     await greeting.start()
 
